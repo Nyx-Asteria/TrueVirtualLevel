@@ -4,6 +4,8 @@
 local SKILLS_INTERFACE = 1466
 local CURRENT_LEVEL = 4
 local BASE_LEVEL = 5
+local VIRTUAL_TOTAL = 11
+local VIRTUAL_TOTAL_SLOT = 2
 local MAX_XP = 200000000
 
 -- Skills panel order differs from the SkillType enum order.
@@ -66,11 +68,40 @@ local function set_level_text(interface, component_id, slot, text)
     end
 end
 
+local original_total = nil
+local displayed_total = nil
+
+local function update_virtual_total(interface, extra_levels)
+    local component = interface:GetComponent(VIRTUAL_TOTAL, 0, VIRTUAL_TOTAL_SLOT)
+    if not component or component.type ~= ui.ComponentType.LABEL then
+        return
+    end
+
+    local current = component.content
+    local native_total
+
+    if current == displayed_total and original_total then
+        native_total = original_total
+    else
+        native_total = tonumber(current)
+        if not native_total then return end
+        original_total = native_total
+    end
+
+    local new_total = tostring(native_total + extra_levels)
+    displayed_total = new_total
+
+    if current ~= new_total then
+        component.content = new_total
+    end
+end
+
 local function update_levels()
     if not Player.IsAvailable() then return end
 
     local interface = ui.Interfaces:GetInterface(SKILLS_INTERFACE)
     if not interface then return end
+    local extra_levels = 0
 
     for index, skill in ipairs(skills) do
         -- Invention already uses its own virtual level system.
@@ -78,6 +109,7 @@ local function update_levels()
             local level = get_virtual_level(Player.GetXPUncapped(skill))
 
             if level then
+                extra_levels = extra_levels + (level - 120)
                 local slot = index - 1
                 local text = tostring(level)
 
@@ -90,6 +122,7 @@ local function update_levels()
             end
         end
     end
+    update_virtual_total(interface, extra_levels)
 end
 
 function PluginShutdown()
@@ -120,7 +153,18 @@ function PluginShutdown()
     else
         log("True Virtual Level: Skills interface unavailable during shutdown")
     end
+    if interface and original_total and displayed_total then
+        local component = interface:GetComponent(VIRTUAL_TOTAL, 0, VIRTUAL_TOTAL_SLOT)
 
+        if component
+            and component.type == ui.ComponentType.LABEL
+            and component.content == displayed_total then
+            component.content = tostring(original_total)
+        end
+    end
+
+    original_total = nil
+    displayed_total = nil
     modified_labels = {}
     log("True Virtual Level: restored " .. restored .. " labels, skipped " .. skipped)
 end
