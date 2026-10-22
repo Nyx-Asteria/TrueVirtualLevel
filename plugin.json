@@ -5,5 +5,6 @@
   "requiredDependencies": {
     "prettyui": 6398181
   },
-  "optionalDependencies": {}
+  "optionalDependencies": {},
+  "hasSettingsIcon": true
 }
