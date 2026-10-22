@@ -273,7 +273,7 @@ local function update_hover_panel(interface)
 
     local ok, result = pcall(function()
         return prettyui.AnchoredTooltip.new(parent, {
-            width = 178,
+            width = 145,
             height = 57,
             padding = 4,
             backgroundColour = 0x100D09FF,
@@ -283,7 +283,7 @@ local function update_hover_panel(interface)
                 local component = interface:GetComponent(2, 0, hovered_slot)
                 local x, y, w, h = screen_rect(component)
                 if not x then return nil end
-                return Vector2.new(x + 48, y + h + 4)
+                return Vector2.new(x + 73, y + h + 4)
             end,
             buildContent = function(tooltip, content)
                 -- Opaque backing beneath the tooltip text.
@@ -298,7 +298,7 @@ local function update_hover_panel(interface)
                 for i = 1, #values do
                     local label = ui.Text.new(content)
                     label:SetPos(2, (i - 1) * 16)
-                    label:SetSize(168, 16)
+                    label:SetSize(139, 16)
                     label.content = values[i]
                     label.rgba = 0xF4E5BFFF
                     if id and id.Font and id.Font.NOTOSANS_12 then
