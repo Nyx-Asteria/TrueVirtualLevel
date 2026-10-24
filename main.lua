@@ -1,14 +1,18 @@
--- True Virtual Level
--- Extends virtual levels to 126 in RuneScape's Skills panel.
+-- True Virtual Level: Skills interface coordinator.
+
+-- This file reads the player's current skill XP and updates the visible Skills
+-- panel labels and total. It does not change the player's actual XP or levels.
+-- XP calculations live in progression.lua, saved preferences in settings.lua,
+-- and the supplemental hover tooltip in hover.lua.
 
 local SKILLS_INTERFACE = 1466
 local CURRENT_LEVEL = 4
 local BASE_LEVEL = 5
 local VIRTUAL_TOTAL = 11
 local VIRTUAL_TOTAL_SLOT = 2
-local MAX_XP = 200000000
 
 -- Skills panel slots run row-by-row, independently of SkillType enum order.
+
 local skills = {
     SkillType.ATTACK, SkillType.HITPOINTS, SkillType.MINING,
     SkillType.STRENGTH, SkillType.AGILITY, SkillType.SMITHING,
@@ -22,66 +26,31 @@ local skills = {
     SkillType.ARCHAEOLOGY, SkillType.NECROMANCY,
 }
 
--- Settings default to enabled tooltips and virtual total.
-local settings = {
-    hover = PersistentDB:GetBool("tvl_hover") ~= false,
-    invention = PersistentDB:GetBool("tvl_invention") == true,
-    virtual_total = PersistentDB:GetBool("tvl_virtual_total") ~= false,
-}
+-- Load shared calculations and persisted settings from their dedicated modules.
 
-local settings_view = nil
+local progression = require("src/progression")
+local settings_module = require("src/settings")
+local settings = settings_module.values
+local get_virtual_level = progression.get_virtual_level
+local standard_level_from_xp = progression.standard_level_from_xp
+
+-- Decide whether TVL should override a skill's displayed level.
+-- Invention normally keeps its native elite XP curve; the optional setting
+-- enables the standard curve for that skill instead.
 
 local function is_extended_skill(skill)
     return skill ~= SkillType.INVENTION or settings.invention
 end
 
--- Standard XP formula, extended through level 126.
-local xp_for_level = { [1] = 0 }
-local points = 0
+-- Remember which native text labels we changed and what they originally said.
+-- Store component IDs and slots rather than UI objects: the game can recreate
+-- components when the interface is closed, reopened, or rebuilt.
 
-for level = 1, 125 do
-    points = points + math.floor(level + 300 * 2 ^ (level / 7))
-    xp_for_level[level + 1] = math.floor(points / 4)
-end
-
-local function get_virtual_level(xp)
-    if type(xp) ~= "number" or xp < xp_for_level[121] then
-        return nil
-    end
-
-    xp = math.min(xp, MAX_XP)
-    local level = 120
-
-    for next_level = 121, 126 do
-        if xp < xp_for_level[next_level] then break end
-        level = next_level
-    end
-
-    return level
-end
-
--- Invention can optionally use the standard curve at any level.
-local function standard_level_from_xp(xp)
-    if type(xp) ~= "number" then return nil end
-    xp = math.max(0, math.min(xp, MAX_XP))
-    local level = 1
-    for next_level = 2, 126 do
-        if xp < xp_for_level[next_level] then break end
-        level = next_level
-    end
-    return level
-end
-
--- Tooltips start at 120; native virtual labels start at 121.
-local function get_hover_level(xp)
-    if type(xp) ~= "number" or xp < xp_for_level[120] then
-        return nil
-    end
-    return get_virtual_level(xp) or 120
-end
-
--- Store component locations rather than UI objects, which can be recreated.
 local modified_labels = {}
+
+-- Find a specific Skills panel label and replace its visible text.
+-- Save the original text the first time we modify it so it can be restored
+-- when a setting changes or the plugin shuts down. Avoid redundant writes.
 
 local function set_level_text(interface, component_id, slot, text)
     local component = interface:GetComponent(component_id, 0, slot)
@@ -103,8 +72,15 @@ local function set_level_text(interface, component_id, slot, text)
     end
 end
 
+-- Keep the game's original total separate from our displayed total.
+-- Otherwise repeated refreshes could add the extra virtual levels again.
+
 local original_total = nil
 local displayed_total = nil
+
+-- Update the visible total-level label using the native total plus TVL's
+-- additional levels. If the game changes the label itself, capture that new
+-- native value before applying our adjustment.
 
 local function update_virtual_total(interface, extra_levels)
     local component = interface:GetComponent(VIRTUAL_TOTAL, 0, VIRTUAL_TOTAL_SLOT)
@@ -131,197 +107,13 @@ local function update_virtual_total(interface, extra_levels)
     end
 end
 
--- Additional XP details alongside the native Skills tooltip.
-local hover_panel = nil
-local hover_panel_slot = nil
-local hover_panel_interface = nil
-local hover_labels = nil
-local hover_logged_error = false
+-- The supplemental tooltip is managed independently of the Skills labels.
 
-local function format_xp(value)
-    local text = tostring(math.floor(value))
-    while true do
-        local updated, count = text:gsub("^(-?%d+)(%d%d%d)", "%1,%2")
-        text = updated
-        if count == 0 then return text end
-    end
-end
+local hover = require("src/hover")
 
--- Format the tooltip for the selected XP curve.
-local function hover_lines(level, xp)
-    if level >= 126 or xp >= MAX_XP then
-        return {
-            "True virtual level: " .. level,
-            "Next level: Max level",
-            "Remainder: 0",
-        }
-    end
-    local threshold = xp_for_level[level + 1]
-    return {
-        "True virtual level: " .. level,
-        "Next level: " .. format_xp(threshold),
-        "Remainder: " .. format_xp(math.max(0, threshold - xp)),
-    }
-end
+-- Restore a label only if it still contains the value TVL wrote.
+-- This avoids overwriting a newer value supplied by the game or another plugin.
 
-local function destroy_hover_panel()
-    if hover_panel then pcall(function() hover_panel:Destroy() end) end
-    hover_panel = nil
-    hover_panel_slot = nil
-    hover_panel_interface = nil
-    hover_labels = nil
-end
-
--- Resolve screen coordinates through the movable interface hierarchy.
-local function screen_rect(component)
-    if not component then return nil end
-
-    local x, y = 0, 0
-    local current = component
-    local seen = {}
-    local depth = 0
-    while current and depth < 20 do
-        local key = tostring(current)
-        if seen[key] then break end
-        seen[key] = true
-        local ok, px, py, sx, sy, parent = pcall(function()
-            return current.x, current.y, current.scrollX, current.scrollY, current.parent
-        end)
-        if not ok then break end
-        if type(px) == "number" then x = x + px end
-        if type(py) == "number" then y = y + py end
-        -- Account for scrolling within parent containers.
-        if parent then
-            if type(sx) == "number" then x = x - sx end
-            if type(sy) == "number" then y = y - sy end
-        end
-        current = parent
-        depth = depth + 1
-    end
-    local ok, width, height = pcall(function()
-        return component.width, component.height
-    end)
-    if not ok then return nil end
-    if depth < 2 then return nil end
-    return x, y, width or 60, height or 27
-end
-
-local function hover_overlay_parent()
-    if not id or not id.Component then return nil end
-    local key = id.Component.TOPLEVEL_V2__PLUGIN_BUILD_LAYER_TOP
-        or id.Component.TOPLEVEL_V2__GAME_AREA
-    if not key then return nil end
-    return ui.Interfaces:GetComponent(key)
-end
-
-local function update_hover_panel(interface)
-    if not settings.hover then
-        destroy_hover_panel()
-        return
-    end
-    if not prettyui or not prettyui.AnchoredTooltip then
-        if not hover_logged_error then
-            log("TVL hover: PrettyUI AnchoredTooltip unavailable")
-            hover_logged_error = true
-        end
-        return
-    end
-    local parent = hover_overlay_parent()
-    if not parent then
-        if not hover_logged_error then
-            log("TVL hover: overlay parent unavailable")
-            hover_logged_error = true
-        end
-        return
-    end
-
-    local hovered_slot, hovered_level, hovered_xp = nil, nil, nil
-    for index, skill in ipairs(skills) do
-        if is_extended_skill(skill) then
-            local slot = index - 1
-            local component = interface:GetComponent(2, 0, slot)
-            if component and component.isMouseOver then
-                local xp = Player.GetXPUncapped(skill)
-                local level = (skill == SkillType.INVENTION and settings.invention)
-                    and standard_level_from_xp(xp) or get_hover_level(xp)
-                if level then
-                    local x = screen_rect(component)
-                    if not x and not hover_logged_error then
-                        log("TVL hover: native skill coordinates unavailable for slot " .. slot)
-                        hover_logged_error = true
-                    end
-                    if x then
-                        hovered_slot, hovered_level, hovered_xp = slot, level, xp
-                        break
-                    end
-                end
-            end
-        end
-    end
-
-    if not hovered_slot then destroy_hover_panel() return end
-    local lines = hover_lines(hovered_level, hovered_xp)
-    if hover_panel and hover_panel_slot == hovered_slot
-        and hover_panel_interface == interface and hover_labels then
-        for i, value in ipairs(lines) do
-            hover_labels[i].content = value
-        end
-        pcall(function() hover_panel:Update() end)
-        return
-    end
-    destroy_hover_panel()
-
-    local ok, result = pcall(function()
-        return prettyui.AnchoredTooltip.new(parent, {
-            width = 145,
-            height = 57,
-            padding = 4,
-            backgroundColour = 0x100D09FF,
-            backgroundAlpha = 1.0,
-            -- Anchor the tooltip to the skill cell.
-            anchor = function()
-                local component = interface:GetComponent(2, 0, hovered_slot)
-                local x, y, w, h = screen_rect(component)
-                if not x then return nil end
-                return Vector2.new(x + 73, y + h + 4)
-            end,
-            buildContent = function(tooltip, content)
-                -- Opaque backing beneath the tooltip text.
-                local background = ui.Rectangle.new(content)
-                background:SetPos(0, 0)
-                background:SetSize(0, 0, 1.0, 1.0)
-                background.fill = true
-                background.colour = Vector4.new(0.055, 0.045, 0.032, 1.0)
-
-                local labels = {}
-                local values = lines
-                for i = 1, #values do
-                    local label = ui.Text.new(content)
-                    label:SetPos(2, (i - 1) * 16)
-                    label:SetSize(139, 16)
-                    label.content = values[i]
-                    label.rgba = 0xF4E5BFFF
-                    if id and id.Font and id.Font.NOTOSANS_12 then
-                        label.font = id.Font.NOTOSANS_12
-                    end
-                    labels[i] = label
-                end
-                return labels
-            end,
-        })
-    end)
-    if ok and result then
-        hover_panel = result
-        hover_panel_slot = hovered_slot
-        hover_panel_interface = interface
-        hover_labels = result.contentResult
-    elseif not hover_logged_error then
-        log("TVL hover panel creation error: " .. tostring(result))
-        hover_logged_error = true
-    end
-end
-
--- Restore a plugin-written label only when its content still matches ours.
 local function restore_level_label(interface, key, label)
     local component = interface:GetComponent(label.component_id, 0, label.slot)
     if component and component.type == ui.ComponentType.LABEL
@@ -331,20 +123,29 @@ local function restore_level_label(interface, key, label)
     modified_labels[key] = nil
 end
 
+-- Main refresh routine: read XP, calculate virtual levels, and update labels.
+
+-- Player.GetXPUncapped supplies XP; progression.lua translates that XP into
+-- levels. The BASE_LEVEL and CURRENT_LEVEL components hold the text displayed
+-- in the Skills panel. set_level_text performs the actual label replacement.
+-- This runs periodically and after settings changes; it is not an XP modifier.
+
 local function update_levels()
     if not Player.IsAvailable() then
-        destroy_hover_panel()
+        hover.destroy()
         return
     end
 
     local interface = ui.Interfaces:GetInterface(SKILLS_INTERFACE)
     if not interface then
-        destroy_hover_panel()
+        hover.destroy()
         return
     end
     local extra_levels = 0
     local active_labels = {}
 
+    -- Each entry maps a SkillType to its visual slot in the Skills panel.
+    -- Read current XP for eligible skills, then update only qualifying labels.
     for index, skill in ipairs(skills) do
         if is_extended_skill(skill) then
             local invention_standard = skill == SkillType.INVENTION and settings.invention
@@ -374,7 +175,9 @@ local function update_levels()
                 set_level_text(interface, BASE_LEVEL, slot, text)
                 active_labels[BASE_LEVEL .. ":" .. slot] = true
 
-                -- Keep real boosted and drained levels visible as normal.
+                -- CURRENT_LEVEL may show temporary boosts or drains.
+                -- Only replace it when gameplay and uncapped levels agree,
+                -- preserving the game's temporary level indicators.
                 if Player.GetLevelGameplay(skill) == Player.GetLevelUncapped(skill) then
                     set_level_text(interface, CURRENT_LEVEL, slot, text)
                     active_labels[CURRENT_LEVEL .. ":" .. slot] = true
@@ -392,55 +195,28 @@ local function update_levels()
     update_virtual_total(interface, settings.virtual_total and extra_levels or 0)
 
     -- Refresh the supplemental XP tooltip.
-    update_hover_panel(interface)
+    hover.update(interface, skills)
 end
 
--- Plugin Hub settings.
-local function setting_checkbox(view, title, key, persistence_key, description)
-    view:AddCheckboxButton({
-        { text = title, value = key, selected = settings[key] },
-    }, {
-        onChange = function(_, _, _, selected)
-            settings[key] = selected
-            if persistence_key then
-                PersistentDB:SetBool(persistence_key, selected)
-            end
-            if key == "hover" and not selected then
-                destroy_hover_panel()
-            end
-            update_levels()
-        end,
-    })
-    view:AddText(description)
-end
+-- Register the Plugin Hub settings callback. settings.lua saves the change;
+-- main.lua then refreshes the Skills panel to reflect it immediately.
+-- Keep settings UI and persistence in src/settings.lua.
+-- UI refresh behavior remains owned by main.lua.
 
-Event.SettingsLayerReady.Subscribe("true_virtual_level_settings", function(event)
-    if settings_view then settings_view:Destroy() end
-    local parent = event.component
-    if not parent then return end
-    settings_view = prettyui.SimpleView.new(parent, {
-        width = parent.width,
-        height = parent.height,
-    })
-    settings_view:AddTitle("Display")
-    setting_checkbox(settings_view, "Extended skill tooltips", "hover", "tvl_hover",
-        "Show virtual levels and remaining XP when hovering a skill at level 120 or above.")
-    setting_checkbox(settings_view, "Extended virtual total", "virtual_total", "tvl_virtual_total",
-        "Include levels above 120 in the Skills panel total.")
-
-    settings_view:AddTitle("Invention")
-    setting_checkbox(settings_view, "Use standard XP curve", "invention", "tvl_invention",
-        "Calculate Invention using the standard XP curve instead of its elite curve.")
+settings_module.register(function(key, selected)
+    if key == "hover" and not selected then
+        hover.destroy()
+    end
+    update_levels()
 end)
+
+-- Unsubscribe and restore native labels when the plugin is disabled.
+-- Only restore values still owned by TVL, then clear our cached state.
 
 function PluginShutdown()
     Event.Logic.Unsubscribe("true_virtual_level_refresh")
-    Event.SettingsLayerReady.Unsubscribe("true_virtual_level_settings")
-    if settings_view then
-        settings_view:Destroy()
-        settings_view = nil
-    end
-    destroy_hover_panel()
+    settings_module.shutdown()
+    hover.destroy()
 
     local interface = ui.Interfaces:GetInterface(SKILLS_INTERFACE)
     if interface then
@@ -463,7 +239,11 @@ function PluginShutdown()
     modified_labels = {}
 end
 
--- Refresh periodically so newly opened Skills panels are updated too.
+-- Poll at a reduced frequency rather than on every game logic tick.
+-- This catches XP changes and Skills panels that have been reopened or rebuilt,
+-- while avoiding unnecessary UI reads and writes on each tick.
+-- The refresh interval is unchanged by this documentation-only update.
+
 local ticks = 0
 Event.Logic.Subscribe("true_virtual_level_refresh", function()
     ticks = ticks + 1
