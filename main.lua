@@ -33,6 +33,7 @@ local settings_module = require("src/settings")
 local settings = settings_module.values
 local get_virtual_level = progression.get_virtual_level
 local standard_level_from_xp = progression.standard_level_from_xp
+local elite = require("src/elite")
 
 -- Decide whether TVL should override a skill's displayed level.
 -- Invention normally keeps its native elite XP curve; the optional setting
@@ -132,11 +133,11 @@ local function restore_level_label(interface, key, label)
         if label.slot == INVENTION_SLOT
             and (label.component_id == BASE_LEVEL or label.component_id == CURRENT_LEVEL)
             and Player.IsAvailable() then
-            -- The native uncapped level follows Invention's elite curve.
-            -- Do not restore a level captured before the player gained XP.
-            local native_level = Player.GetLevelUncapped(SkillType.INVENTION)
-            if type(native_level) == "number" and native_level > 0 then
-                original = tostring(native_level)
+            -- Reconstruct the elite virtual level from XP. The uncapped
+            -- level API can still report 120 after a standard-curve override.
+            local elite_level = elite.level_from_xp(Player.GetXPUncapped(SkillType.INVENTION))
+            if elite_level then
+                original = tostring(elite_level)
             end
         end
         component.content = original
@@ -181,13 +182,10 @@ local function update_levels()
                 if invention_standard then
                     -- Native total already includes Invention's elite-curve level.
                     -- Replace that contribution rather than adding (level - 120).
-                    local key = BASE_LEVEL .. ":" .. slot
-                    local saved = modified_labels[key]
-                    local base = interface:GetComponent(BASE_LEVEL, 0, slot)
-                    local native_level = tonumber(saved and saved.original or
-                        (base and base.content))
-                    if native_level then
-                        extra_levels = extra_levels + level - native_level
+                    local level_difference = elite.standard_level_difference(
+                        Player.GetXPUncapped(skill), level)
+                    if level_difference then
+                        extra_levels = extra_levels + level_difference
                     end
                 else
                     extra_levels = extra_levels + (level - 120)

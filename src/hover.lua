@@ -36,14 +36,21 @@ local function format_xp(value)
 end
 
 -- Build the three text lines for the currently selected progression curve.
--- At level 126 or the XP cap there is no further level threshold to display.
+-- At level 126, track remaining XP toward the cap rather than another level.
 
 local function hover_lines(level, xp)
-    if level >= 126 or xp >= MAX_XP then
+    if xp >= MAX_XP then
         return {
             "True virtual level: " .. level,
-            "Next level: Max level",
-            "Remainder: 0",
+            "XP Cap Reached!",
+            "Remaining: 0",
+        }
+    end
+    if level >= 126 then
+        return {
+            "True virtual level: " .. level,
+            "XP cap: " .. format_xp(MAX_XP),
+            "Remaining: " .. format_xp(math.max(0, MAX_XP - xp)),
         }
     end
     local threshold = xp_for_level[level + 1]

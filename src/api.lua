@@ -1,8 +1,9 @@
 -- True Virtual Level: public API for optional plugin integrations.
-
+--
 -- The RuneScape plugin loader exposes the value returned by main.lua to
 -- dependent plugins. This module builds that return value without exposing
 -- mutable settings or internal XP tables.
+--
 -- All XP thresholds here use TVL's existing standard curve. Invention's
 -- native elite curve is deliberately not approximated by that formula.
 
