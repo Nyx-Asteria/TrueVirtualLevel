@@ -67,9 +67,24 @@ build_settings_view = function(parent, on_change)
 
         -- Invention uses a different native XP curve, so changing this option
         -- changes which level TVL calculates from the player's existing XP.
-        settings_view:AddTitle("Invention")
-        setting_checkbox(settings_view, "Use standard XP curve", "invention", "tvl_invention",
-            "Calculate Invention using the standard XP curve instead of its elite curve.", on_change)
+        settings_view:AddTitle("XP curve")
+        -- A radio group enforces a single selected curve without rebuilding
+        -- the settings view (which would reset the scroll position).
+        settings_view:AddRadioButton({
+            { text = "Invention uses Elite Curve (default)", value = "elite" },
+            { text = "Invention uses Standard Curve", value = "standard" },
+        }, {
+            selectedValue = module.values.invention and "standard" or "elite",
+            onChange = function(_, value)
+                if value ~= "elite" and value ~= "standard" then return end
+                local use_standard = value == "standard"
+                if module.values.invention == use_standard then return end
+                module.values.invention = use_standard
+                PersistentDB:SetBool("tvl_invention", use_standard)
+                on_change("invention", use_standard)
+            end,
+        })
+        settings_view:AddText("Choose whether Invention displays its native elite XP curve or the standard XP curve. This does not change your XP.")
 
         -- Keep the cap option last; it is especially useful to API consumers.
         settings_view:AddTitle("Virtual level cap")
