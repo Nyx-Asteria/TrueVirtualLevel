@@ -275,3 +275,7 @@ Event.Logic.Subscribe("true_virtual_level_refresh", function()
 end)
 
 log("True Virtual Level loaded")
+
+-- Export the public API to plugins declaring TVL as a dependency.
+-- This does not change TVL's existing UI or event subscriptions.
+return require("src/api")
