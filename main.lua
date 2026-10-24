@@ -113,12 +113,33 @@ local hover = require("src/hover")
 
 -- Restore a label only if it still contains the value TVL wrote.
 -- This avoids overwriting a newer value supplied by the game or another plugin.
+-- Invention is special: its original label may be stale if XP was gained while
+-- TVL displayed the standard curve. Read the current native level instead.
+
+local INVENTION_SLOT = nil
+for index, skill in ipairs(skills) do
+    if skill == SkillType.INVENTION then
+        INVENTION_SLOT = index - 1
+        break
+    end
+end
 
 local function restore_level_label(interface, key, label)
     local component = interface:GetComponent(label.component_id, 0, label.slot)
     if component and component.type == ui.ComponentType.LABEL
         and component.content == label.text and label.original ~= nil then
-        component.content = label.original
+        local original = label.original
+        if label.slot == INVENTION_SLOT
+            and (label.component_id == BASE_LEVEL or label.component_id == CURRENT_LEVEL)
+            and Player.IsAvailable() then
+            -- The native uncapped level follows Invention's elite curve.
+            -- Do not restore a level captured before the player gained XP.
+            local native_level = Player.GetLevelUncapped(SkillType.INVENTION)
+            if type(native_level) == "number" and native_level > 0 then
+                original = tostring(native_level)
+            end
+        end
+        component.content = original
     end
     modified_labels[key] = nil
 end
