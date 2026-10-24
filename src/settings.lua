@@ -18,10 +18,15 @@ module.values = {
     invention = PersistentDB:GetBool("tvl_invention") == true,
     -- Include TVL's additional virtual levels in the Skills panel total.
     virtual_total = PersistentDB:GetBool("tvl_virtual_total") ~= false,
+    -- Optionally stop displayed standard virtual levels at 120.
+    cap_120 = PersistentDB:GetBool("tvl_cap_120") == true,
 }
 
 -- Hold the active settings view so it can be replaced or destroyed cleanly.
 local settings_view = nil
+local settings_parent = nil
+local settings_changed = nil
+local build_settings_view
 
 -- Create one checkbox and its explanatory text.
 -- On change, update the shared in-memory value, save it under its existing
@@ -46,10 +51,8 @@ end
 -- The layer can be recreated, so destroy any previous view before rebuilding.
 -- The callback comes from main.lua and runs after each preference change.
 
-function module.register(on_change)
-    Event.SettingsLayerReady.Subscribe("true_virtual_level_settings", function(event)
+build_settings_view = function(parent, on_change)
         if settings_view then settings_view:Destroy() end
-        local parent = event.component
         if not parent then return end
         settings_view = prettyui.SimpleView.new(parent, {
             width = parent.width,
@@ -67,6 +70,32 @@ function module.register(on_change)
         settings_view:AddTitle("Invention")
         setting_checkbox(settings_view, "Use standard XP curve", "invention", "tvl_invention",
             "Calculate Invention using the standard XP curve instead of its elite curve.", on_change)
+
+        -- Keep the cap option last; it is especially useful to API consumers.
+        settings_view:AddTitle("Virtual level cap")
+        setting_checkbox(settings_view, "Cap virtual levels at 120", "cap_120", "tvl_cap_120",
+            "Limit standard-curve virtual levels to 120 instead of 126. Especially useful for plugins using TVL's API. XP is unchanged.", on_change)
+end
+
+-- Programmatic changes use the same persistence and refresh path as the UI.
+-- Rebuild the active settings view so its checkbox reflects the new value.
+function module.set_cap_120(enabled)
+    if type(enabled) ~= "boolean" then return false end
+    if module.values.cap_120 == enabled then return true end
+    module.values.cap_120 = enabled
+    PersistentDB:SetBool("tvl_cap_120", enabled)
+    if settings_changed then settings_changed("cap_120", enabled) end
+    if settings_parent and settings_changed then
+        build_settings_view(settings_parent, settings_changed)
+    end
+    return true
+end
+
+function module.register(on_change)
+    settings_changed = on_change
+    Event.SettingsLayerReady.Subscribe("true_virtual_level_settings", function(event)
+        settings_parent = event.component
+        build_settings_view(settings_parent, on_change)
     end)
 end
 
@@ -79,6 +108,8 @@ function module.shutdown()
         settings_view:Destroy()
         settings_view = nil
     end
+    settings_parent = nil
+    settings_changed = nil
 end
 
 return module

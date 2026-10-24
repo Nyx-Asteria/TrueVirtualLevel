@@ -8,12 +8,12 @@ True Virtual Level is a RuneScape plugin that extends the game's existing **Skil
 
 ## Features
 
-- **Virtual skill levels:** Display standard-curve virtual levels up to **126** directly in the Skills interface.
+- **Virtual skill levels:** Display standard-curve virtual levels up to **126**, or optionally cap them at **120**, directly in the Skills interface.
 - **Extended virtual total:** Optionally include additional virtual levels in the total shown in the Skills panel.
 - **Extended skill tooltips:** See additional level and XP-to-next-level information when hovering eligible skills at level 120 or above.
 - **Invention curve choice:** Keep Invention's native elite XP curve or optionally display it using the standard XP curve.
 - **Native interface behavior:** Preserve boosted and drained skill levels rather than treating temporary changes as earned XP.
-- **200 million XP milestone:** At virtual level 126, progression toward 200 million XP is treated as the final XP milestone, not as progress toward a nonexistent level 127.
+- **200 million XP milestone:** At the selected standard-curve virtual level cap (120 or 126), continue tracking progress toward 200 million XP rather than a nonexistent next virtual level.
 
 True Virtual Level changes **how progression is displayed**, not the XP, levels, or progression rules stored by the game.
 
@@ -30,18 +30,25 @@ Open the RuneScape **Plugin Hub**, find **True Virtual Level**, and open its set
 | **Extended skill tooltips** | Shows additional virtual-level and remaining-XP details when hovering eligible skills at level 120 or above. | On |
 | **Extended virtual total** | Includes levels above 120 in the Skills panel's displayed total. | On |
 | **Use standard XP curve** (Invention) | Displays Invention using standard skill XP thresholds rather than its native elite curve. | Off |
+| **Cap virtual levels at 120** | Limits standard-curve virtual levels to 120 rather than 126. Especially useful for plugins using TVL’s API. | Off |
 
 ### Understanding Invention
 
-Invention uses a different, **elite** XP curve from most other skills. By default, True Virtual Level preserves Invention's native progression, which supports levels up to **150**. If you enable **Use standard XP curve**, TVL instead calculates Invention's displayed virtual level using the standard curve, up to **126**.
+Invention uses a different, **elite** XP curve from most other skills. By default, True Virtual Level preserves Invention's native progression, which supports levels up to **150**. If you enable **Use standard XP curve**, TVL instead calculates Invention's displayed virtual level using the standard curve, up to **126**, or **120** when the optional cap is enabled.
 
 This is a **display preference**. It does not change your actual Invention XP or the game's underlying progression.
 
+### Virtual level cap
+
+**Cap virtual levels at 120** is the last setting in TVL’s settings panel. It is off by default, preserving standard-curve levels through 126. When enabled, standard-curve skills stop displaying virtual levels above 120; native elite-curve Invention retains its own progression through 150. The cap changes displayed progression, not earned XP. At the configured cap, the hover and progression calculations continue tracking XP toward the 200 million milestone.
+
+This option is particularly useful for plugins that use TVL’s API and prefer a level-120 ceiling. Other plugins can also read or change the saved preference through the API, as described below.
+
 ## Public API for plugin developers
 
-True Virtual Level exposes a **read-only Lua API** so other RuneScape plugins can use the same virtual-level calculations and respect the player's Invention curve preference. The API is exported from `main.lua` and implemented in `src/api.lua`.
+True Virtual Level exposes a **Lua API** so other RuneScape plugins can use the same virtual-level calculations and respect the player's Invention curve and level-cap preferences. The API is exported from `main.lua` and implemented in `src/api.lua`.
 
-The public API has its **own version number**, separate from the plugin's release version. The currently implemented API version is `1.0.0`.
+The public API has its **own version number**, separate from the plugin's release version. The currently implemented API version reported by `GetAPIVersion()` is `1.0.0`.
 
 ### Declare an optional dependency
 
@@ -83,9 +90,11 @@ end
 | `GetAPIVersion()` | API version string, currently `"1.0.0"`. |
 | `GetInventionCurve()` | `"elite"` or `"standard"`, reflecting the current Invention setting. |
 | `GetMaxXP()` | Supported XP cap: `200000000`. |
-| `GetMaxVirtualLevel(skill)` | `150` for native elite-curve Invention; otherwise `126`. |
-| `GetXPForLevel(skill, level)` | Standard-curve XP threshold for a supported level, or `nil` when unavailable. |
-| `GetVirtualLevel(skill, xp)` | Calculated standard-curve virtual level, or `nil` when unavailable. |
+| `GetMaxVirtualLevel(skill)` | `150` for native elite-curve Invention; otherwise the configured standard-curve cap (`120` or `126`). |
+| `GetLevelCap120()` | Boolean indicating whether the optional standard-curve level-120 cap is enabled. |
+| `SetLevelCap120(enabled)` | Sets the saved level-cap preference using a boolean (`true` or `false`); returns `false` for invalid input. |
+| `GetXPForLevel(skill, level)` | Standard-curve XP threshold for a supported level up to the configured cap, or `nil` when unavailable. |
+| `GetVirtualLevel(skill, xp)` | Calculated standard-curve virtual level limited by the configured cap, or `nil` when unavailable. |
 | `GetProgress(skill, xp)` | Table describing standard-curve level and XP progress, or `nil` when unavailable. |
 
 For `skill`, pass a RuneScape `SkillType` value such as `SkillType.ATTACK` or `SkillType.INVENTION`. XP values are numbers, not formatted strings.
@@ -103,7 +112,28 @@ For `skill`, pass a RuneScape `SkillType` value such as `SkillType.ATTACK` or `S
 | `nextXP` | XP threshold for the next target. |
 | `remainingXP` | XP remaining until that target. |
 | `progress` | Fractional progress between `0` and `1` (multiply by 100 for a percentage). |
-| `targetType` | `"level"` for the next level, or `"xp_cap"` for the 200 million XP milestone at level 126. |
+| `targetType` | `"level"` for the next level, or `"xp_cap"` for the 200 million XP milestone at the configured cap (120 or 126). |
+
+### Reading and changing the level cap
+
+The 120 cap is a **shared, saved TVL preference**, not a per-plugin override. Changing it affects TVL’s own Skills interface and the progression results seen by other API consumers.
+
+```lua
+-- Read the player’s current cap preference.
+if type(tvl) == "table" and type(tvl.GetLevelCap120) == "function" then
+    local capped_at_120 = tvl.GetLevelCap120()
+end
+
+-- Only change the preference after the player chooses to do so.
+if type(tvl) == "table" and type(tvl.SetLevelCap120) == "function" then
+    local success = tvl.SetLevelCap120(true)  -- Set standard-curve cap to 120.
+    -- tvl.SetLevelCap120(false) restores the default cap of 126.
+end
+```
+
+`SetLevelCap120(enabled)` accepts a boolean, saves the setting, and requests a refresh of TVL’s Skills interface. It returns `false` for non-boolean arguments. The TVL settings checkbox also reflects changes made through the API.
+
+**Guidance for plugin developers:** Plugins that call `SetLevelCap120()` are **strongly encouraged to provide a user-facing setting** that explains the change and lets the player override or disable it. Do not silently or repeatedly force a preferred cap, particularly when the player has changed TVL’s own setting. Provide a straightforward way to reverse the change. If an integration only needs progression data, prefer the read-only API methods.
 
 ### Invention compatibility and fallbacks
 
@@ -111,7 +141,7 @@ When Invention is using its **native elite curve**, `GetXPForLevel`, `GetVirtual
 
 Because TVL is an **optional** dependency, integrations should continue working when TVL is not installed or enabled. Check that the dependency and requested functions exist, and handle `nil` results. `GetInventionCurve()` reads the current setting each time it is called, so consumers can request an updated value after the player changes the preference.
 
-The public API was tested from a separate Level Lens development build using an optional dependency, including calculations at 100 million and 200 million XP. This test confirms cross-plugin access; it does not mean Level Lens currently uses TVL for its normal progress bars.
+The public API has been tested through an optional Level Lens integration, including standard skill progression, Invention curve selection, and progress calculations toward the 200 million XP cap.
 
 ## License
 

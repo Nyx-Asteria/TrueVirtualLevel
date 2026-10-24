@@ -8,9 +8,14 @@
 -- native elite curve is deliberately not approximated by that formula.
 
 local progression = require("src/progression")
-local settings = require("src/settings").values
+local settings_module = require("src/settings")
+local settings = settings_module.values
 
 local api = {}
+
+local function standard_cap()
+    return settings.cap_120 and 120 or 126
+end
 
 -- API version is independent of the plugin release version.
 function api.GetAPIVersion()
@@ -28,13 +33,25 @@ function api.GetMaxXP()
     return progression.MAX_XP
 end
 
+-- Set the optional standard-curve level cap from another plugin.
+-- Persist the preference and refresh TVL's Skills interface immediately.
+-- Returns false for non-boolean inputs.
+function api.SetLevelCap120(enabled)
+    return settings_module.set_cap_120(enabled)
+end
+
+-- Read the currently selected standard-curve cap.
+function api.GetLevelCap120()
+    return settings.cap_120
+end
+
 -- Return the highest displayed virtual level supported for this skill.
 -- Native elite-curve Invention reaches 150; the standard curve reaches 126.
 function api.GetMaxVirtualLevel(skill)
     if skill == SkillType.INVENTION and not settings.invention then
         return 150
     end
-    return 126
+    return standard_cap()
 end
 
 -- Get the XP threshold for a level on the selected standard curve.
@@ -47,6 +64,7 @@ function api.GetXPForLevel(skill, level)
     if type(level) ~= "number" or level % 1 ~= 0 then
         return nil
     end
+    if level > standard_cap() then return nil end
     return progression.xp_for_level[level]
 end
 
@@ -57,7 +75,8 @@ function api.GetVirtualLevel(skill, xp)
     if skill == SkillType.INVENTION and not settings.invention then
         return nil
     end
-    return progression.standard_level_from_xp(xp)
+    local level = progression.standard_level_from_xp(xp)
+    return level and math.min(level, standard_cap()) or nil
 end
 
 -- Describe progress toward the next standard-curve level or 200m XP.
@@ -75,9 +94,9 @@ function api.GetProgress(skill, xp)
     end
 
     local capped_xp = math.max(0, math.min(xp, progression.MAX_XP))
-    local level = progression.standard_level_from_xp(capped_xp)
+    local level = math.min(progression.standard_level_from_xp(capped_xp), standard_cap())
     local start_xp = progression.xp_for_level[level]
-    local at_cap = level == 126
+    local at_cap = level == standard_cap()
     local target_xp = at_cap and progression.MAX_XP
         or progression.xp_for_level[level + 1]
     local span = target_xp - start_xp
@@ -85,7 +104,7 @@ function api.GetProgress(skill, xp)
 
     return {
         level = level,
-        maxLevel = 126,
+        maxLevel = standard_cap(),
         currentXP = capped_xp,
         levelXP = start_xp,
         nextXP = target_xp,

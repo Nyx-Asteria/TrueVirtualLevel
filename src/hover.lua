@@ -13,6 +13,10 @@ local standard_level_from_xp = progression.standard_level_from_xp
 local get_hover_level = progression.get_hover_level
 local hover = {}
 
+local function display_level(level)
+    return settings.cap_120 and math.min(level, 120) or level
+end
+
 -- Track the current tooltip and the skill/interface it belongs to.
 -- Reuse it while the same cell is hovered; recreate it when the target changes.
 -- The error flag prevents repeated log messages if the UI API is unavailable.
@@ -39,6 +43,7 @@ end
 -- At level 126, track remaining XP toward the cap rather than another level.
 
 local function hover_lines(level, xp)
+    local level_cap = settings.cap_120 and 120 or 126
     if xp >= MAX_XP then
         return {
             "True virtual level: " .. level,
@@ -46,7 +51,7 @@ local function hover_lines(level, xp)
             "Remaining: 0",
         }
     end
-    if level >= 126 then
+    if level >= level_cap then
         return {
             "True virtual level: " .. level,
             "XP cap: " .. format_xp(MAX_XP),
@@ -157,6 +162,7 @@ local function update_hover_panel(interface, skills)
                 local xp = Player.GetXPUncapped(skill)
                 local level = (skill == SkillType.INVENTION and settings.invention)
                     and standard_level_from_xp(xp) or get_hover_level(xp)
+                if level then level = display_level(level) end
                 if level then
                     local x = screen_rect(component)
                     if not x and not hover_logged_error then

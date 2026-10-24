@@ -35,6 +35,11 @@ local get_virtual_level = progression.get_virtual_level
 local standard_level_from_xp = progression.standard_level_from_xp
 local elite = require("src/elite")
 
+-- Standard-curve display cap; elite Invention remains native when selected.
+local function capped_standard_level(level)
+    return level and (settings.cap_120 and math.min(level, 120) or level)
+end
+
 -- Decide whether TVL should override a skill's displayed level.
 -- Invention normally keeps its native elite XP curve; the optional setting
 -- enables the standard curve for that skill instead.
@@ -173,9 +178,9 @@ local function update_levels()
             local invention_standard = skill == SkillType.INVENTION and settings.invention
             local level
             if invention_standard then
-                level = standard_level_from_xp(Player.GetXPUncapped(skill))
+                level = capped_standard_level(standard_level_from_xp(Player.GetXPUncapped(skill)))
             else
-                level = get_virtual_level(Player.GetXPUncapped(skill))
+                level = not settings.cap_120 and get_virtual_level(Player.GetXPUncapped(skill)) or nil
             end
             if level then
                 local slot = index - 1
