@@ -7,6 +7,39 @@
 local progression = {}
 local MAX_XP = 200000000
 
+-- Native skill caps are distinct from virtual levels and XP thresholds.
+-- Unlisted skills have a native cap of 120.
+local native_caps = {
+    -- Level 99
+    [SkillType.HITPOINTS] = 99,
+    [SkillType.AGILITY] = 99,
+    [SkillType.DEFENCE] = 99,
+    [SkillType.FISHING] = 99,
+    [SkillType.COOKING] = 99,
+    [SkillType.PRAYER] = 99,
+    [SkillType.DIVINATION] = 99,
+
+    -- Level 110
+    [SkillType.MINING] = 110,
+    [SkillType.SMITHING] = 110,
+    [SkillType.CRAFTING] = 110,
+    [SkillType.FIREMAKING] = 110,
+    [SkillType.FLETCHING] = 110,
+    [SkillType.WOODCUTTING] = 110,
+    [SkillType.RUNECRAFTING] = 110,
+    [SkillType.HUNTER] = 110,
+}
+
+local function get_native_cap(skill)
+    return native_caps[skill] or 120
+end
+
+local function clamp_to_native_cap(skill, level)
+    if type(level) ~= "number" then return nil end
+    return math.min(level, get_native_cap(skill))
+end
+
+
 -- Generate RuneScape's standard cumulative XP thresholds through level 126.
 -- Each level adds floor(level + 300 * 2^(level/7)) points; dividing the running
 -- total by four gives the XP required for the next level. Level 1 starts at 0 XP.
@@ -68,6 +101,8 @@ local function get_hover_level(xp)
 end
 
 -- Export calculations to the plugin's other Lua modules.
+progression.get_native_cap = get_native_cap
+progression.clamp_to_native_cap = clamp_to_native_cap
 progression.MAX_XP = MAX_XP
 progression.xp_for_level = xp_for_level
 progression.get_virtual_level = get_virtual_level
