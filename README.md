@@ -48,7 +48,7 @@ This option is particularly useful for plugins that use TVL’s API and prefer a
 
 True Virtual Level exposes a **Lua API** so other RuneScape plugins can use the same virtual-level calculations and respect the player's Invention curve and level-cap preferences. The API is exported from `main.lua` and implemented in `src/api.lua`.
 
-The public API has its **own version number**, separate from the plugin's release version. The currently implemented API version reported by `GetAPIVersion()` is `1.0.0`.
+The public API has its **own version number**, separate from the plugin's release version. The currently implemented API version reported by `GetAPIVersion()` is `1.1.0`.
 
 ### Declare an optional dependency
 
@@ -87,21 +87,21 @@ end
 
 | Function | Returns |
 | --- | --- |
-| `GetAPIVersion()` | API version string, currently `"1.0.0"`. |
+| `GetAPIVersion()` | API version string, currently `"1.1.0"`. |
 | `GetInventionCurve()` | `"elite"` or `"standard"`, reflecting the current Invention setting. |
 | `GetMaxXP()` | Supported XP cap: `200000000`. |
-| `GetMaxVirtualLevel(skill)` | `150` for native elite-curve Invention; otherwise the configured standard-curve cap (`120` or `126`). |
+| `GetMaxVirtualLevel(skill, cap_override?)` | `150` for native elite Invention; otherwise the configured standard-curve cap or optional override (`120` or `126`). |
 | `GetLevelCap120()` | Boolean indicating whether the optional standard-curve level-120 cap is enabled. |
 | `SetLevelCap120(enabled)` | Sets the saved level-cap preference using a boolean (`true` or `false`); returns `false` for invalid input. |
-| `GetXPForLevel(skill, level)` | Standard-curve XP threshold for a supported level up to the configured cap, or `nil` when unavailable. |
-| `GetVirtualLevel(skill, xp)` | Calculated standard-curve virtual level limited by the configured cap, or `nil` when unavailable. |
-| `GetProgress(skill, xp)` | Table describing standard-curve level and XP progress, or `nil` when unavailable. |
+| `GetXPForLevel(skill, level, cap_override?)` | Standard-curve XP threshold up to the effective cap; `nil` for native elite Invention or unavailable levels. |
+| `GetVirtualLevel(skill, xp, cap_override?)` | Calculated standard-curve level limited by the effective cap; retains `nil` for native elite Invention. |
+| `GetProgress(skill, xp, cap_override?)` | Progress for standard skills **and native elite Invention**; `nil` for invalid inputs. |
 
 For `skill`, pass a RuneScape `SkillType` value such as `SkillType.ATTACK` or `SkillType.INVENTION`. XP values are numbers, not formatted strings.
 
 ### `GetProgress` result
 
-`GetProgress(skill, xp)` returns these fields when the selected curve is supported:
+`GetProgress(skill, xp, cap_override?)` returns these fields for standard skills and native elite Invention:
 
 | Field | Meaning |
 | --- | --- |
@@ -112,7 +112,7 @@ For `skill`, pass a RuneScape `SkillType` value such as `SkillType.ATTACK` or `S
 | `nextXP` | XP threshold for the next target. |
 | `remainingXP` | XP remaining until that target. |
 | `progress` | Fractional progress between `0` and `1` (multiply by 100 for a percentage). |
-| `targetType` | `"level"` for the next level, or `"xp_cap"` for the 200 million XP milestone at the configured cap (120 or 126). |
+| `targetType` | `"level"` for the next level, or `"xp_cap"` for the 200 million XP milestone at the effective maximum (standard 120/126 or elite 150). |
 
 ### Reading and changing the level cap
 
@@ -135,9 +135,24 @@ end
 
 **Guidance for plugin developers:** Plugins that call `SetLevelCap120()` are **strongly encouraged to provide a user-facing setting** that explains the change and lets the player override or disable it. Do not silently or repeatedly force a preferred cap, particularly when the player has changed TVL’s own setting. Provide a straightforward way to reverse the change. If an integration only needs progression data, prefer the read-only API methods.
 
+### Calculation-only level cap overrides
+
+`GetProgress`, `GetVirtualLevel`, `GetMaxVirtualLevel`, and `GetXPForLevel` accept an optional final argument of **`120`** or **`126`**. Omit it to follow the player's saved TVL preference. The override affects only that call: it **does not change** the player's TVL setting or the Skills interface. An unsupported override returns `nil`.
+
+```lua
+local xp = Player.GetXPUncapped(SkillType.ATTACK)
+local follows_tvl = tvl.GetProgress(SkillType.ATTACK, xp)
+local cap_120 = tvl.GetProgress(SkillType.ATTACK, xp, 120)
+local cap_126 = tvl.GetProgress(SkillType.ATTACK, xp, 126)
+```
+
+For native elite Invention, the maximum remains **150**, regardless of the optional standard-curve override. At the chosen maximum level, progress targets the 200 million XP milestone. Use overrides for a consumer plugin's own display preferences instead of calling `SetLevelCap120()` and modifying the player's saved TVL preference.
+
 ### Invention compatibility and fallbacks
 
-When Invention is using its **native elite curve**, `GetXPForLevel`, `GetVirtualLevel`, and `GetProgress` return **`nil`** for Invention. This is intentional: TVL does not apply the standard XP formula to elite progression. Consumer plugins should use the game's native Invention information or their own elite-curve handling in that case.
+When Invention uses its **native elite curve**, `GetProgress(SkillType.INVENTION, xp)` now returns level, thresholds, remaining XP, and fractional progress through level **150** using TVL's native elite XP table. `GetXPForLevel()` and `GetVirtualLevel()` **still return `nil`** for native elite Invention to preserve their existing behavior. When the player selects standard Invention, all progression methods use the standard curve.
+
+**Compatibility note:** Prior API versions returned `nil` from `GetProgress()` for native elite Invention. Integrations that relied on that sentinel should check `GetInventionCurve()` explicitly. The API version is now **1.1.0**.
 
 Because TVL is an **optional** dependency, integrations should continue working when TVL is not installed or enabled. Check that the dependency and requested functions exist, and handle `nil` results. `GetInventionCurve()` reads the current setting each time it is called, so consumers can request an updated value after the player changes the preference.
 

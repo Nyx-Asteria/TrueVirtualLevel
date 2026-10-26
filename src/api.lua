@@ -4,22 +4,38 @@
 -- dependent plugins. This module builds that return value without exposing
 -- mutable settings or internal XP tables.
 --
--- All XP thresholds here use TVL's existing standard curve. Invention's
--- native elite curve is deliberately not approximated by that formula.
+-- Standard skills use progression.lua; native Invention uses the exact
+-- elite thresholds in elite.lua. Neither calculation changes player XP.
 
 local progression = require("src/progression")
+local elite = require("src/elite")
 local settings_module = require("src/settings")
 local settings = settings_module.values
 
 local api = {}
 
-local function standard_cap()
-    return settings.cap_120 and 120 or 126
+local function standard_cap(override)
+    return override or (settings.cap_120 and 120 or 126)
+end
+
+-- Optional calculation-only cap. Invalid overrides fail instead of silently
+-- changing the meaning of a call. No persistent settings are touched.
+local function valid_override(override)
+    return override == nil or override == 120 or override == 126
+end
+
+local function native_elite(skill)
+    return skill == SkillType.INVENTION and not settings.invention
+end
+
+local function valid_xp(xp)
+    return type(xp) == "number" and xp == xp
+        and xp ~= math.huge and xp ~= -math.huge
 end
 
 -- API version is independent of the plugin release version.
 function api.GetAPIVersion()
-    return "1.0.0"
+    return "1.1.0"
 end
 
 -- Return the currently selected Invention XP curve. Read on every call so
@@ -46,65 +62,69 @@ function api.GetLevelCap120()
 end
 
 -- Return the highest displayed virtual level supported for this skill.
--- Native elite-curve Invention reaches 150; the standard curve reaches 126.
-function api.GetMaxVirtualLevel(skill)
-    if skill == SkillType.INVENTION and not settings.invention then
+-- The optional 120/126 override affects only standard-curve skills.
+function api.GetMaxVirtualLevel(skill, cap_override)
+    if not valid_override(cap_override) then return nil end
+    if native_elite(skill) then
         return 150
     end
-    return standard_cap()
+    return standard_cap(cap_override)
 end
 
--- Get the XP threshold for a level on the selected standard curve.
--- For elite-curve Invention return nil: its thresholds are different and
--- are not defined by progression.lua. Consumers can retain native handling.
-function api.GetXPForLevel(skill, level)
-    if skill == SkillType.INVENTION and not settings.invention then
+-- Return a standard-curve XP threshold up to the effective cap.
+-- The legacy nil result for native elite Invention is preserved here.
+function api.GetXPForLevel(skill, level, cap_override)
+    if not valid_override(cap_override) then return nil end
+    if native_elite(skill) then
         return nil
     end
     if type(level) ~= "number" or level % 1 ~= 0 then
         return nil
     end
-    if level > standard_cap() then return nil end
+    if level > standard_cap(cap_override) then return nil end
     return progression.xp_for_level[level]
 end
 
--- Calculate a level from XP on the currently selected standard curve.
--- For elite Invention return nil instead of pretending it uses standard XP.
--- Consumers should use the game's native Invention level in that case.
-function api.GetVirtualLevel(skill, xp)
-    if skill == SkillType.INVENTION and not settings.invention then
+-- Calculate a standard-curve level from XP with an optional cap override.
+-- Preserve the legacy nil result for native elite Invention.
+function api.GetVirtualLevel(skill, xp, cap_override)
+    if not valid_override(cap_override) then return nil end
+    if native_elite(skill) then
         return nil
     end
     local level = progression.standard_level_from_xp(xp)
-    return level and math.min(level, standard_cap()) or nil
+    return level and math.min(level, standard_cap(cap_override)) or nil
 end
 
--- Describe progress toward the next standard-curve level or 200m XP.
--- Returns nil for invalid XP or native elite-curve Invention. At level 126,
--- the target is the 200m milestone, NOT an imaginary level 127.
---
--- progress is a fraction from 0 to 1. Consumers may multiply by 100.
-function api.GetProgress(skill, xp)
-    if type(xp) ~= "number" or xp ~= xp
-        or xp == math.huge or xp == -math.huge then
-        return nil
-    end
-    if skill == SkillType.INVENTION and not settings.invention then
+-- Describe progress toward the next level or the 200m XP milestone.
+-- Native elite Invention now uses its own exact XP thresholds through 150.
+-- An optional 120/126 cap applies ONLY to standard-curve calculations.
+-- At the final supported level, progress continues toward 200m XP.
+-- The result shape is identical for both curves; progress ranges from 0 to 1.
+function api.GetProgress(skill, xp, cap_override)
+    if not valid_xp(xp) or not valid_override(cap_override) then
         return nil
     end
 
     local capped_xp = math.max(0, math.min(xp, progression.MAX_XP))
-    local level = math.min(progression.standard_level_from_xp(capped_xp), standard_cap())
-    local start_xp = progression.xp_for_level[level]
-    local at_cap = level == standard_cap()
+    local is_elite = native_elite(skill)
+    local max_level = is_elite and 150 or standard_cap(cap_override)
+    local level = is_elite and elite.level_from_xp(capped_xp)
+        or progression.standard_level_from_xp(capped_xp)
+    level = math.min(level, max_level)
+
+    local start_xp = is_elite and elite.xp_for_level(level)
+        or progression.xp_for_level[level]
+    local at_cap = level == max_level
     local target_xp = at_cap and progression.MAX_XP
-        or progression.xp_for_level[level + 1]
+        or (is_elite and elite.xp_for_level(level + 1)
+            or progression.xp_for_level[level + 1])
     local span = target_xp - start_xp
     local fraction = span > 0 and (capped_xp - start_xp) / span or 1
 
     return {
         level = level,
-        maxLevel = standard_cap(),
+        maxLevel = max_level,
         currentXP = capped_xp,
         levelXP = start_xp,
         nextXP = target_xp,

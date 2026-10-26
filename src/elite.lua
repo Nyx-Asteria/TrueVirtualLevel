@@ -29,6 +29,12 @@ for level, xp in pairs(virtual_xp) do
     xp_for_level[level] = xp
 end
 
+-- Public threshold lookup for the native elite progression API.
+function elite.xp_for_level(level)
+    if type(level) ~= "number" or level % 1 ~= 0 then return nil end
+    return xp_for_level[level]
+end
+
 function elite.level_from_xp(xp)
     if type(xp) ~= "number" then return nil end
     local level = 1
