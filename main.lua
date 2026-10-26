@@ -33,6 +33,7 @@ local settings_module = require("src/settings")
 local settings = settings_module.values
 local get_virtual_level = progression.get_virtual_level
 local standard_level_from_xp = progression.standard_level_from_xp
+local get_native_cap = progression.get_native_cap
 local elite = require("src/elite")
 
 -- Standard-curve display cap; elite Invention remains native when selected.
@@ -130,19 +131,40 @@ for index, skill in ipairs(skills) do
     end
 end
 
+-- Restore from live skill data rather than a possibly stale UI snapshot.
+-- Some Skills labels briefly contain "1" while the interface initializes;
+-- caching that text and restoring it later can incorrectly display level 1.
 local function restore_level_label(interface, key, label)
     local component = interface:GetComponent(label.component_id, 0, label.slot)
     if component and component.type == ui.ComponentType.LABEL
         and component.content == label.text and label.original ~= nil then
         local original = label.original
-        if label.slot == INVENTION_SLOT
-            and (label.component_id == BASE_LEVEL or label.component_id == CURRENT_LEVEL)
-            and Player.IsAvailable() then
-            -- Reconstruct the elite virtual level from XP. The uncapped
-            -- level API can still report 120 after a standard-curve override.
-            local elite_level = elite.level_from_xp(Player.GetXPUncapped(SkillType.INVENTION))
-            if elite_level then
-                original = tostring(elite_level)
+        local skill = skills[label.slot + 1]
+        if skill and Player.IsAvailable() then
+            local xp = Player.GetXPUncapped(skill)
+            local native_level
+            if skill == SkillType.INVENTION then
+                native_level = elite.level_from_xp(xp)
+            else
+                native_level = standard_level_from_xp(xp)
+            end
+            if native_level then
+                -- The unmodified Skills panel shows ordinary virtual levels
+                -- through 120, even for skills whose actual cap is 99 or 110.
+                native_level = math.min(native_level, 120)
+                if label.component_id == BASE_LEVEL then
+                    original = tostring(native_level)
+                elseif label.component_id == CURRENT_LEVEL then
+                    local gameplay = Player.GetLevelGameplay(skill)
+                    local uncapped = Player.GetLevelUncapped(skill)
+                    -- Respect active boosts/drains; do not overwrite them with
+                    -- the unboosted level when TVL is disabled.
+                    if gameplay ~= nil and uncapped ~= nil and gameplay ~= uncapped then
+                        original = tostring(gameplay)
+                    else
+                        original = tostring(native_level)
+                    end
+                end
             end
         end
         component.content = original
@@ -171,41 +193,63 @@ local function update_levels()
     local extra_levels = 0
     local active_labels = {}
 
-    -- Each entry maps a SkillType to its visual slot in the Skills panel.
-    -- Read current XP for eligible skills, then update only qualifying labels.
+    -- Keep the existing display untouched when the native-cap option is off.
+    -- With it on, show the native cap as the current-level label and the
+    -- XP-derived virtual level as the base-level label once XP exceeds the
+    -- skill's actual cap. Never replace boosted or drained current levels.
     for index, skill in ipairs(skills) do
-        if is_extended_skill(skill) then
-            local invention_standard = skill == SkillType.INVENTION and settings.invention
-            local level
-            if invention_standard then
-                level = capped_standard_level(standard_level_from_xp(Player.GetXPUncapped(skill)))
-            else
-                level = not settings.cap_120 and get_virtual_level(Player.GetXPUncapped(skill)) or nil
-            end
-            if level then
-                local slot = index - 1
-                if invention_standard then
-                    -- Native total already includes Invention's elite-curve level.
-                    -- Replace that contribution rather than adding (level - 120).
-                    local level_difference = elite.standard_level_difference(
-                        Player.GetXPUncapped(skill), level)
-                    if level_difference then
-                        extra_levels = extra_levels + level_difference
-                    end
-                else
-                    extra_levels = extra_levels + (level - 120)
-                end
-                local text = tostring(level)
-                set_level_text(interface, BASE_LEVEL, slot, text)
-                active_labels[BASE_LEVEL .. ":" .. slot] = true
+        local xp = Player.GetXPUncapped(skill)
+        local invention_standard = skill == SkillType.INVENTION and settings.invention
+        local level
+        if invention_standard then
+            level = capped_standard_level(standard_level_from_xp(xp))
+        elseif is_extended_skill(skill) then
+            level = not settings.cap_120 and get_virtual_level(xp) or nil
+        end
 
-                -- CURRENT_LEVEL may show temporary boosts or drains.
-                -- Only replace it when gameplay and uncapped levels agree,
-                -- preserving the game's temporary level indicators.
-                if Player.GetLevelGameplay(skill) == Player.GetLevelUncapped(skill) then
-                    set_level_text(interface, CURRENT_LEVEL, slot, text)
-                    active_labels[CURRENT_LEVEL .. ":" .. slot] = true
-                end
+        local native_cap = get_native_cap(skill)
+        local display_virtual = level
+        if settings.actual_cap and skill ~= SkillType.INVENTION then
+            -- For 99/110-cap skills, virtual levels begin before 121.
+            -- This calculation is for the display only; the virtual total
+            -- continues using the existing accounting logic below.
+            local calculated = standard_level_from_xp(xp)
+            if calculated and calculated > native_cap then
+                display_virtual = capped_standard_level(calculated)
+            end
+        end
+
+        local slot = index - 1
+        if settings.actual_cap and skill == SkillType.INVENTION and not invention_standard then
+            local elite_level = elite.level_from_xp(xp)
+            if elite_level and elite_level > native_cap then
+                display_virtual = elite_level
+            end
+        end
+        if level then
+            if invention_standard then
+                -- Native total already includes elite Invention progression.
+                local difference = elite.standard_level_difference(xp, level)
+                if difference then extra_levels = extra_levels + difference end
+            else
+                extra_levels = extra_levels + (level - 120)
+            end
+        end
+
+        if display_virtual then
+            set_level_text(interface, BASE_LEVEL, slot, tostring(display_virtual))
+            active_labels[BASE_LEVEL .. ":" .. slot] = true
+        end
+
+        -- Preserve temporary boosts and drains instead of masking them.
+        if Player.GetLevelGameplay(skill) == Player.GetLevelUncapped(skill) then
+            local current_text = display_virtual
+            if settings.actual_cap and display_virtual and display_virtual > native_cap then
+                current_text = native_cap
+            end
+            if current_text then
+                set_level_text(interface, CURRENT_LEVEL, slot, tostring(current_text))
+                active_labels[CURRENT_LEVEL .. ":" .. slot] = true
             end
         end
     end
